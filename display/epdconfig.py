@@ -114,7 +114,6 @@ class RaspberryPi:
         return self.DEV_SPI.DEV_SPI_ReadData()
 
     def module_init(self, cleanup=False):
-        self.GPIO_PWR_PIN.on()
         
         if cleanup:
             find_dirs = [

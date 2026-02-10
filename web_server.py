@@ -80,3 +80,4 @@ class SPTWebServer:
     def start(self):
         self.thread.start()
         print(f"[SPTWebServer] Running on http://{self.host}:{self.port}")
+        print(f"Connect at http://10.42.0.1:5000/")

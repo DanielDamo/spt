@@ -8,11 +8,21 @@ from sensors.bme280 import bme280
 from sensors.tsl2561 import tsl2561
 from sensors.hcsr501 import hcsr501
 import display.waveshare as waveshare
+import RPi.GPIO as GPIO
+import time
+
 
 PIXELS_X = 480
 PIXELS_Y = 800
 DPI = 100
 INTERVAL = 1
+
+B1_PIN = 16
+B1_LED = 26
+
+B2_PIN = 5
+B2_LED = 6
+    
 
 class PiController:
     def __init__(
@@ -28,15 +38,20 @@ class PiController:
         self.tsl = tsl2561(INTERVAL)
         self.tsl.format()
 
-        # Motion
-        self.hcsr = hcsr501(INTERVAL)
-        self.hcsr.format()
-
         self.sensor_threads = [
             self.bme,
-            self.tsl,
-            self.hcsr
+            self.tsl
         ]
+
+        # Buttons
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setup(B1_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(B1_LED, GPIO.OUT)
+        GPIO.setup(B2_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+        GPIO.setup(B2_LED, GPIO.OUT)
+
+        GPIO.add_event_detect(B1_PIN, GPIO.FALLING, callback=self.on_press_1, bouncetime=150)
+        GPIO.add_event_detect(B2_PIN, GPIO.FALLING, callback=self.on_press_2, bouncetime=150)
 
         # Display
         try:
@@ -65,12 +80,25 @@ class PiController:
             sensor_thread.start()
         print("[PiController] Sensor threads started.")
 
-    # Stop all sensors and display
+    # Stop all sensors, buttons and display
     def stop(self):
         for sensor in self.sensor_threads:
             sensor.stop()
         print("[PiController] Sensor threads stopped.")
         waveshare.epdconfig.module_exit(cleanup=True)
+        GPIO.cleanup()
+    
+    def on_press_1(self, channel):
+        GPIO.output(B1_LED, 1)
+        print("1")
+        time.sleep(1)
+        GPIO.output(B1_LED, 0)
+
+    def on_press_2(self, channel):
+        GPIO.output(B2_LED, 0)
+        print("2")
+        time.sleep(1)
+        GPIO.output(B2_LED, 1)
     
     def display_image(self, img_name):
         try:
@@ -95,8 +123,7 @@ class PiController:
             "temperature": self.bme.sensor.temperature,
             "humidity": self.bme.sensor.humidity,
             "pressure": self.bme.sensor.pressure,
-            "light": self.tsl.sensor.lux,
-            #"motion": self.hcsr.motion_detected
+            "light": self.tsl.sensor.lux
         }
     
     # Show all available images
@@ -116,17 +143,6 @@ class PiController:
                 times.append(dt.datetime.fromisoformat(t_str))
                 values.append(float(v_str))
         return times, values
-
-    # Plot Helper function
-    def read_motion_log(self, path):
-        times = []
-        with open(path) as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.lower().startswith("time"):
-                    continue
-                times.append(dt.datetime.fromisoformat(line))
-        return times
 
     # Generate plot
     def generate_plot(self):
