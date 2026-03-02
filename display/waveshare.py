@@ -205,7 +205,7 @@ class EPD:
 
         # Rotate if portrait fits better
         if abs(rotated_ratio - TARGET_RATIO) < abs(ratio - TARGET_RATIO):
-            img = img.rotate(-90, expand=True)
+            img = img.rotate(90, expand=True)
 
         # Crop to correct aspect ratio
         img = self.crop_center_to_ratio(img, TARGET_RATIO)

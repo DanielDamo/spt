@@ -1,37 +1,30 @@
 from pi_controller import PiController
-from web_server import SPTWebServer
+import ble_server
 import logging
 import time
+import threading
 
-logging.basicConfig(level=logging.DEBUG)
 
-# Initialize Pi controller with sensors
 pi_controller = PiController()
 
-# Start sensor threads
-pi_controller.start_sensors()
+# Start BLE server in its own thread so main thread can keep running
+ble_thread = threading.Thread(
+    target=ble_server.run,
+    args=(pi_controller,),
+    kwargs={"name": "SPT-Pi"},
+    daemon=True
+)
+ble_thread.start()
 
-
-webserver = SPTWebServer(pi_controller)
-webserver.start()
-
-# Main loop
 try:
-    while True:
-        # Do other Pi stuff here if needed
-        pass
-except KeyboardInterrupt:
+    # Main loop watches for shutdown request
+    while not pi_controller.shutdown_requested.is_set():
+        time.sleep(0.1)
+finally:
+    # Stop controller threads + GPIO + display + save
     pi_controller.stop()
 
-#time.sleep(10)
+    # Wait briefly for BLE thread to exit cleanly
+    ble_thread.join(timeout=2.0)
 
-# # Example: read latest values
-# pi_controller.display_image("dog.jpg")
-# time.sleep(5)
-# pi_controller.display_graph()
-# time.sleep(5)
-# pi_controller.display_image("lake.jpg")
-
-# # Stop sensors
-# pi_controller.stop()
-
+    #TODO: also power off pi
