@@ -345,7 +345,7 @@ class Agent(dbus.service.Object):
 # -------------------------
 def handle_command(cmd: str, pi) -> str:
     """
-    Parse and execute simple text commands from the phone.
+    Parse and pass on commands to the pi
     """
     cmd = (cmd or "").strip()
     if not cmd:
@@ -354,27 +354,9 @@ def handle_command(cmd: str, pi) -> str:
     parts = cmd.split()
     op = parts[0].lower()
 
-    if op in ("graph", "g"):
-        pi.display_graph()
-        return "OK graph"
+    pi._cmd_q.put(cmd)
 
-    if op in ("photo", "p"):
-        if len(parts) < 2:
-            return "ERR usage: photo <filename>"
-        fn = parts[1]
-        if fn not in pi.list_uploaded_photos():
-            return "ERR no such file"
-        pi.display_image(fn)
-        return f"OK photo {fn}"
-
-    if op in ("list", "ls"):
-        return "OK " + " ".join(pi.list_uploaded_photos())
-
-    if op in ("sensors", "s"):
-        v = pi.get_sensor_values()
-        return f"OK t={v['temperature']} h={v['humidity']} p={v['pressure']} l={v['light']}"
-
-    return "ERR unknown"
+    return f"{cmd} queued"
 
 
 # -----------------------------
@@ -405,6 +387,14 @@ class CmdCharacteristic(Characteristic):
         print(f"[BLE] CMD: {cmd!r} -> {resp!r}")
 
 
+        if getattr(self.resp_char, "notifying", False):
+            self.resp_char.PropertiesChanged(
+                GATT_CHRC_IFACE,
+                {"Value": self.resp_char.value},
+                []
+            )
+
+
 class RespCharacteristic(Characteristic):
     """
     RESP characteristic:
@@ -412,9 +402,17 @@ class RespCharacteristic(Characteristic):
     - Its value is updated by the CMD characteristic after a command executes
     """
     def __init__(self, bus, index, service):
-        super().__init__(bus, index, RESP_UUID, ["read", "encrypt-read"], service)
+        super().__init__(bus, index, RESP_UUID, ["read", "encrypt-read", "notify"], service)
         self.value = dbus.Array(b"OK ready", signature="y")
+        self.notifying = False
+    
+    def StartNotify(self):
+        print("[BLE] Notifications enabled")
+        self.notifying = True
 
+    def StopNotify(self):
+        print("[BLE] Notifications disabled")
+        self.notifying = False
 
 # --------------------------
 # Main server entry point
@@ -561,6 +559,17 @@ def run(pi_controller, name="SPT-Pi"):
     
     def ble_stop_now():
         print("[BLE] Stop requested")
+        # Unsubscribe everyone
+        try:
+            resp.StopNotify()
+        except Exception:
+            pass
+
+        # Disconnect everyone
+        try:
+            disconnect_all_devices()
+        except Exception:
+            pass
 
         # Stop advertising (safe even if already stopped)
         try:
@@ -605,13 +614,29 @@ def run(pi_controller, name="SPT-Pi"):
         is_connected = bool(changed["Connected"])
 
         if is_connected:
-            # First connection wins
+            # After device connects
             if connected_device_path["path"] is None:
                 connected_device_path["path"] = path
                 print("[BLE] Device connected:", path)
-
-                # Stop advertising to reduce further connection attempts
                 stop_advertising()
+
+                # Enable notify if not already
+                if not resp.notifying:
+                    resp.StartNotify()
+
+                # Update the characteristic value
+                config_str = pi_controller.get_config()
+                resp.value = dbus.Array(config_str.encode("utf-8"), signature="y")
+
+                # Trigger a notification so the app gets it
+                resp.PropertiesChanged(
+                    GATT_CHRC_IFACE,
+                    {"Value": resp.value},
+                    []
+                )
+
+                print("[BLE] Sent initial config to app:", config_str)
+
             else:
                 # Already have a connected device; reject any additional one
                 if path != connected_device_path["path"]:

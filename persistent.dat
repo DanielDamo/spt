@@ -1,2 +1,8 @@
-display_mode: image
+display_mode: graph
 last_image: lake.jpg
+sensor_interval: 600
+auto_update_graph: False
+auto_update_graph_interval: 600
+graph_time_scale: 1
+auto_delete_old_date: False
+auto_delete_after: 1

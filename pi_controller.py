@@ -33,6 +33,7 @@ B2_LED = 6
 
 BLINK_DT = 0.25
 HOLD_TIME = 2
+
 GRAPH_UPDATE_INTERVAL = 15 * 60
 INTERVAL = 1
 
@@ -56,7 +57,7 @@ class PiController:
 
         GPIO.add_event_detect(B1_PIN, GPIO.BOTH, callback=self._on_b1_edge, bouncetime=80)
         GPIO.add_event_detect(B2_PIN, GPIO.BOTH, callback=self._on_b2_edge, bouncetime=80)
-        
+
         self._b1_pressed_at = None
         self._b1_lock = threading.Lock()
         self._b2_pressed_at = None
@@ -70,7 +71,7 @@ class PiController:
         try:
             self.epd = waveshare.EPD()
             self.epd.init()
-            self.display_lock = threading.Lock()        
+            self.display_lock = threading.Lock()       
         except IOError as e:
             logging.info(e)
         except KeyboardInterrupt:    
@@ -176,43 +177,67 @@ class PiController:
 
     def _cmd_worker(self) -> None:
         while not self._stop_evt.is_set():
+            # Do not do any commands while busy
+            if self.get_state() == State.BUSY:
+                continue
+            
             try:
-                cmd, payload = self._cmd_q.get(timeout=0.5)
+                command = self._cmd_q.get(timeout=0.5)
             except queue.Empty:
                 continue
 
-            if cmd == "stop":
+            # Button commands
+            if isinstance(command, tuple):
+                op, payload = command
+            
+            # App commands
+            elif isinstance(command, str):
+                command_parts = command.split(":")
+                op = command_parts[0]
+                payload = command_parts[1]
+
+            if op == "stop":
                 return
 
             try:
-                if cmd == "press1":
+                # App commands
+                if op == "mode":
+                    if payload == "graph":
+                        self.display_graph()
+                    else:
+                        self.display_image(self.persistent.get("last_image", "lake.jpg"))
+            
+
+
+                # Button Commands
+                elif op == "press1":
                     # Toggle display mode safely here (heavy work allowed)
                     if self.persistent.get("display_mode") == "graph":
                         self.display_image(self.persistent.get("last_image", "lake.jpg"))
                     else:
                         self.display_graph()
 
-                elif cmd == "hold1":
+                elif op == "hold1":
                     self.shutdown_requested.set()
 
-                elif cmd == "press2":
+                elif op == "press2":
                     # TODO: something
                     pass
                 
-                elif cmd == "hold2":
+                elif op == "hold2":
                     # REDO bluetooth
                     if hasattr(self, "ble_reset") and callable(self.ble_reset):
                         self.ble_reset()
                     else:
                         print("[PiController] No ble_reset hook wired up")
 
-                elif cmd == "set_state":
+                elif op == "set_state":
                     self.set_state(payload)  # payload is a State
 
-                elif cmd == "display_image":
+                elif op == "display_image":
                     self.display_image(str(payload))
 
-                elif cmd == "display_graph":
+                elif op == "display_graph":
                     self.display_graph()
 
             except Exception as e:
@@ -385,6 +410,9 @@ class PiController:
     def get_state(self) -> State:
         with self._state_cv:
             return self._state
+    
+    def get_config(self) -> None:
+        return str(self.persistent)
 
 
 
