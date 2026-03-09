@@ -1,0 +1,8 @@
+display_mode: image
+sensor_interval: 600
+auto_update_graph: false
+auto_update_graph_interval: 600
+graph_time_scale: 1
+auto_delete_old_date: false
+auto_delete_after: 180
+last_image: mtc.jpg
