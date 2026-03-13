@@ -1,6 +1,6 @@
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 import board
 import busio
@@ -17,10 +17,12 @@ class BME280:
     so the new interval takes effect on the very next cycle.
     """
 
-    def __init__(self, interval: float, on_reading=None) -> None:
+    def __init__(self, interval: float, delete_old_data: bool = False, delete_after: int = -1, on_reading=None) -> None:
         self._i2c    = busio.I2C(board.SCL, board.SDA)
         self._sensor = adafruit_bme280.Adafruit_BME280_I2C(self._i2c, address=0x77)
         self._interval  = interval
+        self._auto_delete_old_data = delete_old_data
+        self._delete_after = delete_after
         self._on_reading = on_reading   # optional callable, fired after each reading
 
         self._temp_dir     = os.path.join("logs", "temp")
@@ -33,6 +35,7 @@ class BME280:
         self._stop_evt = threading.Event()
         self._wake_evt = threading.Event()
         self._thread   = threading.Thread(target=self._run, daemon=True, name="bme280")
+        self._last_cleaned: str | None = None   # date string of last cleanup run
 
     # ------------------------------------------------------------------
     # Public API
@@ -52,6 +55,10 @@ class BME280:
         """Change the sampling interval.  Takes effect after the current reading."""
         self._interval = interval
         self._wake_evt.set()
+
+    def update_auto_delete(self, delete_old_data: bool, delete_after: int) -> None:
+        self._auto_delete_old_data = delete_old_data
+        self._delete_after = delete_after
 
     def get_log_dirs(self) -> list:
         return [self._humidity_dir, self._pressure_dir, self._temp_dir]
@@ -88,6 +95,25 @@ class BME280:
         self._append(os.path.join(self._temp_dir,     f"{date_str}.csv"), "temp",     time_str, temp)
         self._append(os.path.join(self._humidity_dir, f"{date_str}.csv"), "humidity", time_str, humidity)
         self._append(os.path.join(self._pressure_dir, f"{date_str}.csv"), "pressure", time_str, pressure)
+
+        if date_str != self._last_cleaned and self._auto_delete_old_data and self._delete_after != -1:
+            self._delete_old_files(now.date())
+            self._last_cleaned = date_str
+
+    def _delete_old_files(self, today) -> None:
+        """Delete any CSV whose filename date is more than _delete_after days ago."""
+        cutoff = today - timedelta(days=self._delete_after)
+        for log_dir in (self._temp_dir, self._humidity_dir, self._pressure_dir):
+            for fname in os.listdir(log_dir):
+                if not fname.endswith(".csv"):
+                    continue
+                try:
+                    file_date = date.fromisoformat(fname[:-4])  # strip .csv
+                except ValueError:
+                    continue
+                if file_date < cutoff:
+                    os.remove(os.path.join(log_dir, fname))
+                    print(f"[BME280] Deleted old log: {os.path.join(log_dir, fname)}")
 
     @staticmethod
     def _append(path: str, label: str, timestamp: str, value: float) -> None:

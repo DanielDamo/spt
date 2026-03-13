@@ -43,7 +43,7 @@ TARGET_RATIO = EPD_WIDTH/ EPD_HEIGHT
 logger = logging.getLogger(__name__)
 
 class EPD:
-    def __init__(self):
+    def __init__(self, rotation_callback=None):
         self.reset_pin = epdconfig.RST_PIN
         self.dc_pin = epdconfig.DC_PIN
         self.busy_pin = epdconfig.BUSY_PIN
@@ -57,6 +57,8 @@ class EPD:
         # self.ORANGE = 0x0080ff   #   0100
         self.BLUE   = 0xff0000   #   0101
         self.GREEN  = 0x00ff00   #   0110
+
+        self.set_rotation = rotation_callback
         
 
     # Hardware reset
@@ -194,41 +196,81 @@ class EPD:
         l = (w - new_w) // 2
         t = (h - new_h) // 2
         return img.crop((l, t, l + new_w, t + new_h))
+    
+    def convert_image_to_buffer(self, image_path, save=True):
+        """Load image, convert to 7-colour EPD format, pack pixels, and optionally save."""
 
-    def getbuffer(self, image_path):
-        """Load a PNG, process, convert to EPD buffer, and save BMP copy."""
-        # Load image (PNG)
         img = Image.open(image_path)
         w, h = img.size
         ratio = w / h
         rotated_ratio = h / w
 
+        portrait = 0
+
         # Rotate if portrait fits better
         if abs(rotated_ratio - TARGET_RATIO) < abs(ratio - TARGET_RATIO):
             img = img.rotate(90, expand=True)
+            portrait = 1
 
-        # Crop to correct aspect ratio
+        # Crop and resize
         img = self.crop_center_to_ratio(img, TARGET_RATIO)
-        # Resize to display resolution
         img = img.resize((EPD_WIDTH, EPD_HEIGHT), Image.LANCZOS)
 
-        # Prepare 7-color palette
-        pal_image = Image.new("P", (1,1))
+        # Prepare 7-colour palette
+        pal_image = Image.new("P", (1, 1))
         pal_image.putpalette(
-            (0,0,0, 255,255,255, 255,255,0, 255,0,0, 0,0,0, 0,0,255, 0,255,0) +
-            (0,0,0)*249
+            (
+                0,0,0,
+                255,255,255,
+                255,255,0,
+                255,0,0,
+                0,0,0,
+                0,0,255,
+                0,255,0
+            ) + (0,0,0)*249
         )
 
-        # Convert and dither
+        # Quantize
         img_7color = img.convert("RGB").quantize(palette=pal_image)
-        buf_7color = bytearray(img_7color.tobytes("raw"))
+        buf_7color = bytearray(img_7color.tobytes())
 
-        # Pack 4-bit color into bytes
-        buf = [0x00] * int(EPD_WIDTH* EPD_HEIGHT / 2)
+        # Pack pixels
+        packed = bytearray(EPD_WIDTH * EPD_HEIGHT // 2)
+
         idx = 0
         for i in range(0, len(buf_7color), 2):
-            buf[idx] = (buf_7color[i] << 4) + buf_7color[i+1]
+            packed[idx] = (buf_7color[i] << 4) | buf_7color[i + 1]
             idx += 1
+
+        # 1-byte header for rotation
+        out = bytearray(1 + len(packed))
+        out[0] = portrait & 0x01
+        out[1:] = packed
+
+        if save:
+            out_path = str(Path(image_path).with_suffix(".bin"))
+            with open(out_path, "wb") as f:
+                f.write(out)
+        else:
+            return out
+
+    def getbuffer(self, image_path):
+        # Graphs aren't pre-converted
+        if "graph.png" in image_path:
+            data = self.convert_image_to_buffer(image_path, save=False)
+        else:
+            with open(image_path, "rb") as f:
+                data = bytearray(f.read())
+
+        # Extract rotation bit
+        rotation_bit = data[0] & 0x01
+        buf = data[1:]
+
+        # Update controller rotation
+        if rotation_bit == 1:
+            self.set_rotation("portrait")
+        else:
+            self.set_rotation("landscape")
 
         return buf
 

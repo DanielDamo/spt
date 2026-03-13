@@ -1,8 +1,10 @@
-display_mode: image
+display_mode: graph
 sensor_interval: 600
-auto_update_graph: false
+auto_update_graph: true
 auto_update_graph_interval: 600
-graph_time_scale: 1
+graph_time_scale: 3
 auto_delete_old_date: false
-auto_delete_after: 180
-last_image: mtc.jpg
+auto_delete_after: 7
+auto_delete_old_data: false
+last_image: sunset.bin
+rotation: landscape
