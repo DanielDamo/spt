@@ -2,9 +2,9 @@ display_mode: graph
 sensor_interval: 600
 auto_update_graph: true
 auto_update_graph_interval: 600
-graph_time_scale: 3
+graph_time_scale: -1
 auto_delete_old_date: false
-auto_delete_after: 7
+auto_delete_after: -1
 auto_delete_old_data: false
-last_image: sunset.bin
-rotation: landscape
+last_image: flower.bin
+rotation: portrait

@@ -341,8 +341,6 @@ class Agent(dbus.service.Object):
         raise Rejected("No input")
 
 
-# (Commands are queued directly in CmdCharacteristic.WriteValue)
-
 
 # -----------------------------
 # Characteristics for GATT
@@ -422,7 +420,7 @@ def run(pi_controller, name="SPT-Pi"):
     # Register headless agent so pairing doesn't require acceptance on the Pi
     agent = Agent(bus)
     agent_mgr = dbus.Interface(bus.get_object(BLUEZ_SERVICE_NAME, "/org/bluez"), AGENT_MANAGER_IFACE)
-    agent_mgr.RegisterAgent(AGENT_PATH, "NoInputNoOutput")   # Just Works
+    agent_mgr.RegisterAgent(AGENT_PATH, "NoInputNoOutput")   # Just works
     agent_mgr.RequestDefaultAgent(AGENT_PATH)                # make it the active default
     print("[BLE] Headless agent registered (NoInputNoOutput)")
 
@@ -444,9 +442,9 @@ def run(pi_controller, name="SPT-Pi"):
     # Create advertisement object
     adv = Advertisement(bus, local_name=name, service_uuids=[SERVICE_UUID])
 
-    # ------------------------------------------------------
-    # Single-connection enforcement state (simple approach)
-    # ------------------------------------------------------
+    # -------------------------------------------
+    # Single-connection enforcement state
+    # -------------------------------------------
     # Track the DBus object path for the single connected device.
     connected_device_path = {"path": None}
 

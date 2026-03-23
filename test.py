@@ -245,3 +245,6 @@ def _plot_landscape(data, date_str, period_str, days, effective_days):
 if __name__ == "__main__":
     generate_plot(-1, "portrait")
     generate_plot(-1, "landscape")
+
+
+    

@@ -18,15 +18,6 @@ class State(Enum):
 
 STATE_FILE = "persistent.dat"
 
-state = {
-    "display_mode": 0       # 0 = Graph, 1 = picture
-}
-
-config = {
-    "sensor_interval": 1    # Seconds
-}
-
-
 PERSISTENT_DEFAULTS = {
     "display_mode":               "graph",
     "sensor_interval":            "600",

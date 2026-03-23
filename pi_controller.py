@@ -58,6 +58,11 @@ SENSORS = [
 ]
 
 def _smooth(v, window=9):
+    """
+    Simple moving average using convolution.
+
+    Padding with edge values avoids shrinking the signal length.
+    """
     if len(v) <= window:
         return v
     k = np.ones(window) / window
@@ -67,23 +72,52 @@ def _rgba(hex_col, a):
     h = hex_col.lstrip("#")
     return tuple(int(h[i:i+2], 16) / 255 for i in (0, 2, 4)) + (a,)
 
-def _x_axis(ax, effective_days):
+def _x_axis(ax, effective_days, edge_threshold=0.031):
+    """
+    Custom tick filtering.
+
+    The edge_threshold prevents labels too close to the plot edges,
+    which would otherwise get cut off or look cramped.
+    """
+    import matplotlib.ticker as mticker
+
     if effective_days <= 1:
-        ax.xaxis.set_major_locator(mdates.HourLocator(byhour=range(0, 24, 3)))
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+        locator   = mdates.HourLocator(byhour=range(0, 24, 3))
+        formatter = mdates.DateFormatter("%H:%M")
     elif effective_days <= 7:
-        ax.xaxis.set_major_locator(mdates.DayLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+        locator   = mdates.DayLocator()
+        formatter = mdates.DateFormatter("%d %b")
     else:
-        ax.xaxis.set_major_locator(mdates.WeekdayLocator())
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d %b"))
+        locator   = mdates.WeekdayLocator()
+        formatter = mdates.DateFormatter("%d %b")
+
+    xmin, xmax = ax.get_xlim()
+    span       = xmax - xmin
+    ticks      = [t for t in locator.tick_values(mdates.num2date(xmin), mdates.num2date(xmax))
+                  if (t - xmin) / span > edge_threshold
+                  and (xmax - t) / span > edge_threshold]
+
+    ax.xaxis.set_major_locator(mticker.FixedLocator(ticks))
+    ax.xaxis.set_major_formatter(formatter)
     ax.tick_params(axis="x", labelsize=7, labelcolor=LABEL_COL, length=0, pad=10)
     for label in ax.get_xticklabels():
         label.set_clip_on(False)
 
 def _draw_panel(ax, s, t_num, v_arr, effective_days,
                 show_x=False, label_fontsize=15, value_fontsize=24, unit_fontsize=11,
-                pixels_wide=PIXELS_X):
+                pixels_wide=PIXELS_X, edge_threshold=0.031):
+    """
+    This function does quite a lot:
+
+    - Smooths the data
+    - Dynamically scales axes with padding
+    - Draws layered fills for a nicer look
+    - Annotates min/max points
+
+    Worth noting:
+    all scaling is relative, so it behaves well for different ranges.
+    """
+
     color = s["color"]
     for sp in ax.spines.values():
         sp.set_visible(False)
@@ -113,19 +147,16 @@ def _draw_panel(ax, s, t_num, v_arr, effective_days,
             solid_capstyle="round", solid_joinstyle="round", zorder=3)
 
     ax.set_yticks([])
-    if show_x:
-        _x_axis(ax, effective_days)
-    else:
-        ax.set_xticks([])
+    ax.set_xticks([])
 
     for idx, dot_col, t_va in [
-        (int(np.argmin(v_arr)), LABEL_COL, "top"),
-        (int(np.argmax(v_arr)), WHITE,      "bottom"),
+        (int(np.argmin(v_s)), LABEL_COL, "top"),
+        (int(np.argmax(v_s)), WHITE,      "bottom"),
     ]:
         frac = (t_num[idx] - t_num[0]) / max(t_num[-1] - t_num[0], 1e-9)
         ha   = "left" if frac < 0.06 else "right" if frac > 0.94 else "center"
         if t_va == "top":
-            val_frac    = (v_arr[idx] - vmin) / vrange
+            val_frac    = (v_s[idx] - vmin) / vrange
             v_off, t_va = (6, "bottom") if val_frac < 0.20 else (-8, "top")
         else:
             v_off = 6
@@ -193,8 +224,8 @@ def _plot_landscape(data, date_str, period_str, effective_days):
     gs  = fig.add_gridspec(3, 2,
                            height_ratios=[0.28, 2, 2.3],
                            hspace=0.12, wspace=0.06,
-                           left=0.02, right=0.985,
-                           top=0.978, bottom=0.095)
+                           left=0.01, right=0.975,
+                           top=0.978, bottom=0.04)
     _header(fig.add_subplot(gs[0, :]), date_str, period_str)
     panel_positions = [(1, 0), (1, 1), (2, 0), (2, 1)]
     bottom_row      = {2, 3}
@@ -251,6 +282,7 @@ class PiController:
         self._stop_evt = threading.Event()
         self._cmd_q: queue.Queue = queue.Queue()
         self.shutdown_requested  = threading.Event()
+        self.set_state(State.BOOTING)
 
         self._xfer_chunks: list[str]  = []
         self._xfer_index:  int        = 0
@@ -265,6 +297,11 @@ class PiController:
         GPIO.setup(B2_LED, GPIO.OUT)
         GPIO.add_event_detect(B1_PIN, GPIO.BOTH, callback=self._on_b1_edge, bouncetime=80)
         GPIO.add_event_detect(B2_PIN, GPIO.BOTH, callback=self._on_b2_edge, bouncetime=80)
+
+        self._cmd_thread = threading.Thread(target=self._cmd_worker, daemon=True, name="cmd-worker")
+        self._led_thread = threading.Thread(target=self._led_worker, daemon=True, name="led-worker")
+        self._cmd_thread.start()
+        self._led_thread.start()
 
         self._b1_pressed_at: float | None = None
         self._b1_lock = threading.Lock()
@@ -295,10 +332,6 @@ class PiController:
             waveshare.epdconfig.module_exit(cleanup=True)
             raise
 
-        self._cmd_thread = threading.Thread(target=self._cmd_worker, daemon=True, name="cmd-worker")
-        self._led_thread = threading.Thread(target=self._led_worker, daemon=True, name="led-worker")
-        self._cmd_thread.start()
-        self._led_thread.start()
         self.bme.start()
         self.tsl.start()
         self.set_state(State.READY)
@@ -357,6 +390,14 @@ class PiController:
                 self._cmd_q.put(("bluetooth_reset", None))
 
     def _cmd_worker(self) -> None:
+        """
+        Command processing loop.
+
+        Important behaviour:
+        - Pauses if state is BUSY
+        - Accepts both tuple commands and string commands
+        - String commands are parsed as "op:payload"
+        """
         while not self._stop_evt.is_set():
             if self.get_state() == State.BUSY:
                 time.sleep(0.05)
@@ -368,7 +409,7 @@ class PiController:
             if isinstance(command, tuple):
                 op, payload = command
             elif isinstance(command, str):
-                parts = command.split(":", 1)
+                parts = command.split(":", 1)       # Only split once so payload can contain ':' safely
                 if len(parts) < 2:
                     print(f"[PiController] Malformed command (no colon): {command!r}")
                     continue
@@ -384,13 +425,22 @@ class PiController:
                 self.set_state(State.ERROR)
 
     def _handle_command(self, op: str, payload) -> None:
+        """
+        Large dispatcher for all commands.
+
+        Design choice:
+        everything funnels through here, which keeps BLE logic simple
+        but makes this method quite dense.
+        """
         if op == "request" and payload == "config":
             self.ble_send(self.get_config())
        
         elif op == "request" and payload == "images":
-            images = self.list_uploaded_images()
-            self.ble_send("images:" + ",".join(images))
-            # TODO when requesting all images, if there are many images, they dont all make it through
+            names = [os.path.splitext(f)[0] for f in self.list_uploaded_images()]
+            self.ble_send(f"imagesStart:{len(names)}")
+            for name in names:
+                self.ble_send(f"imagesItem:{name}")
+            self.ble_send("imagesEnd")
 
         elif op == "disconnect":
             self.ble_reset()
@@ -416,8 +466,7 @@ class PiController:
             self.display_graph()
        
         elif op == "imageSet" and isinstance(payload, str):
-            img = payload.strip()
-            self.display_image(img)
+            self.display_image(f"{payload.strip()}.bin")
        
         elif op == "imgStart":
             parts = payload.split(":")
@@ -437,7 +486,9 @@ class PiController:
             b64data   = payload[colon + 1:]
             try:
                 index       = int(index_str)
+                # Each chunk is base64 encoded, so we decode and append
                 chunk_bytes = base64.b64decode(b64data)
+                # Note: no ordering check here, assumes sender behaves
                 self._upload_chunks.append(chunk_bytes)
                 bytes_received = sum(len(c) for c in self._upload_chunks)
                 print(f"[PiController] imgChunk {index} received ({len(chunk_bytes)}B), total {bytes_received}B")
@@ -463,14 +514,15 @@ class PiController:
                 self.ble_send(f"imgError:save failed")
        
         elif op == "deleteImage" and isinstance(payload, str):
-            imageToDelete = os.path.join(self.upload_folder, payload)
-            if os.path.exists(imageToDelete):
-                os.remove(imageToDelete)
-                print(f"[PiController] {payload} deleted.")
+            name     = payload.strip()
+            filename = f"{name}.bin"
+            path     = os.path.join(self.upload_folder, filename)
+            if os.path.exists(path):
+                os.remove(path)
+                print(f"[PiController] {filename} deleted.")
             else:
-                print(f"[PiController] {payload} not found.")
-            
-            if payload == self.persistent["last_image"]:
+                print(f"[PiController] {filename} not found.")
+            if self.persistent.get("last_image") == filename:
                 self.display_graph()
        
         elif op == "deleteAllImages":
@@ -503,6 +555,8 @@ class PiController:
                 acked = int(payload.strip())
             except ValueError:
                 acked = -1
+            # Basic reliability mechanism:
+            # only send next chunk if previous one was acknowledged
             if acked == self._xfer_index - 1:
                 self._send_next_chunk()
             else:
@@ -635,6 +689,12 @@ class PiController:
             raise
 
     def display_graph(self) -> None:
+        """
+        Regenerates the plot every time.
+
+        This is slightly expensive, but ensures the display is always fresh
+        and consistent with current settings.
+        """
         try:
             with self.display_lock:
                 self.set_state(State.BUSY)
@@ -732,7 +792,7 @@ class PiController:
             "graphScale":      p.get("graph_time_scale",           "1"),
             "autoDeleteData":  p.get("auto_delete_old_data",       "false"),
             "autoDelete":      p.get("auto_delete_after",          "-1"),
-            "lastImage":       p.get("last_image",                 "lake.bin"),
+            "lastImage":       os.path.splitext(p.get("last_image", "lake.bin"))[0],
         }.items())
         return "{" + items + "}"
 
