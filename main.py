@@ -1,5 +1,6 @@
 import threading
 import time
+import subprocess
 
 import ble_server
 from pi_controller import PiController
@@ -43,3 +44,6 @@ finally:
     ble_thread = _ble_thread["thread"]
     if ble_thread is not None:
         ble_thread.join(timeout=2.0)
+
+    time.sleep(2)
+    subprocess.run(["sudo", "poweroff"])
